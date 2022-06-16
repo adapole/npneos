@@ -1,28 +1,34 @@
-import express from 'express';
+import express, { Application, Request, Response, NextFunction } from 'express';
 import WalletConnect from '@walletconnect/node';
+require('dotenv').config();
+import WebSocket from 'ws';
 
-// Create a connector
-const connector = new WalletConnect(
-	{
-		bridge: 'https://bridge.walletconnect.org', // Required
-	},
-
-	{
-		clientMeta: {
-			description: 'WalletConnect NodeJS Client',
-			url: 'https://nodejs.org/en/',
-			icons: ['https://nodejs.org/static/images/logo.svg'],
-			name: 'WalletConnect',
-		},
-	}
-);
 const PORT = process.env.PORT || 3000;
-const app: express.Application = express();
+const app: Application = express();
+app.use(express.json());
+app.use(express.static(__dirname + '/'));
 
-app.get('/', (req, res) => {
-	res.send('Hello World!');
+const server = require('http').createServer(app);
+const wss = new WebSocket.Server({ server: server });
+app.get('/', (req: Request, res: Response, next: NextFunction) => {
+	res.status(200).send('Hello World!');
 });
 
-app.listen(8080, () => {
-	console.log(`Example app listening on port ${PORT}!`);
+server.listen(PORT, () => {
+	console.log(`Server started on port ${PORT}`);
+});
+
+console.log('websocket server created');
+
+wss.on('connection', function (ws) {
+	var id = setInterval(function () {
+		ws.send(JSON.stringify(new Date()), function () {});
+	}, 1000);
+
+	console.log('websocket connection open');
+
+	ws.on('close', function () {
+		console.log('websocket connection close');
+		clearInterval(id);
+	});
 });

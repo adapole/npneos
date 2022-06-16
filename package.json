@@ -17,6 +17,7 @@
 		"node": "16.14.2"
 	},
 	"dependencies": {
+		"@json-rpc-tools/utils": "^1.7.6",
 		"@walletconnect/node": "^1.0.0",
 		"algosdk": "^1.17.0",
 		"dotenv": "^16.0.1",

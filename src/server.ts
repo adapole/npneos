@@ -1,20 +1,15 @@
 import express, { Application, Request, Response, NextFunction } from 'express';
-import * as fs from 'fs';
-import WalletConnect from '@walletconnect/node';
 require('dotenv').config();
 import WebSocket from 'ws';
-import algosdk from 'algosdk';
+import { apiGetAccountAssets, ChainType, getContractAPI } from './algodfunct';
 
 const PORT = process.env.PORT || 3000;
 const app: Application = express();
+(BigInt.prototype as any).toJSON = function () {
+	return this.toString();
+};
 app.use(express.json());
 app.use(express.static(__dirname + '/'));
-
-async function getContractAPI(): Promise<algosdk.ABIContract> {
-	const buff = fs.readFileSync('./d4t.json');
-
-	return new algosdk.ABIContract(JSON.parse(buff.toString()));
-}
 
 const server = require('http').createServer(app);
 const wss = new WebSocket.Server({ server: server });
@@ -25,6 +20,19 @@ app.get('/d4t', async (req: Request, res: Response, next: NextFunction) => {
 	const contract = await getContractAPI();
 	const appid = contract.networks['default'].appID;
 	res.status(200).send(appid + '\n');
+});
+app.get('/assets', async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		//const { data } = await axios.get(`https://api.chucknorris.io/jokes/random`);
+		const assets = await apiGetAccountAssets(
+			ChainType.TestNet,
+			'BORRU26OCWXDSDEVY5I64L7HW7WXIAIOC4JPNRITTZWIUQKZDPGBXLGFT4'
+		);
+
+		res.status(200).send(assets);
+	} catch (error) {
+		next(error);
+	}
 });
 
 server.listen(PORT, () => {

@@ -1,0 +1,29 @@
+{
+	"name": "npneos-wallet",
+	"version": "1.0.0",
+	"description": "",
+	"main": "dist/server.js",
+	"scripts": {
+		"dev": "nodemon src/server.ts",
+		"start": "node dist/server.js",
+		"build-ts": "tsc",
+		"postinstall": "npm run build-ts",
+		"watch-ts": "tsc -w"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"dependencies": {
+		"@walletconnect/node": "^1.0.0",
+		"express": "^4.18.1"
+	},
+	"devDependencies": {
+		"@types/express": "^4.17.13",
+		"@types/node": "^17.0.41",
+		"@walletconnect/types": "^1.7.8",
+		"nodemon": "^2.0.16",
+		"ts-node": "^10.8.1",
+		"tslib": "^2.4.0",
+		"typescript": "^4.7.3"
+	}
+}

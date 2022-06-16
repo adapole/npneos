@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Document</title>
+	</head>
+	<body>
+		<h1>Client</h1>
+		<button onclick="sendMessage()">Send Message</button>
+		<button onclick="sign()">Sign</button>
+		<button onclick="connectWallet()">Connect Wallet</button>
+		<button onclick="diconnectWallet()">Disconnect</button>
+	</body>
+	<script>
+		const socket = new WebSocket('ws://localhost:3000');
+
+		// connection opened
+		socket.addEventListener('open', function (event) {
+			console.log('Connected to WS server');
+		});
+
+		// Listen for messages
+		socket.addEventListener('message', function (event) {
+			console.log('Message from server: ' + event.data);
+		});
+
+		const sendMessage = (message) => {
+			socket.send('Hello from client');
+			//socket.send(message);
+		};
+		const connectWallet = (message) => {
+			socket.send('wc');
+			//socket.send(message);
+		};
+		const sign = (message) => {
+			socket.send('sign');
+			//socket.send(message);
+		};
+		const diconnectWallet = (message) => {
+			console.log('Disconnected!!');
+			socket.close();
+		};
+	</script>
+</html>

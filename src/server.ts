@@ -1,22 +1,31 @@
 import express, { Application, Request, Response, NextFunction } from 'express';
-require('dotenv').config();
-import WebSocket from 'ws';
+import sha512 from 'js-sha512';
+import * as fs from 'fs';
+import { v4 as uuidv4 } from 'uuid';
 import {
 	apiGetAccountAssets,
 	apiGetTxnParams,
+	apiSubmitTransactions,
 	ChainType,
-	getContractAPI,
 	testNetClientalgod,
 	testNetClientindexer,
 } from './algodfunct';
+require('dotenv').config();
+import WebSocket from 'ws';
 import WalletConnect from '@walletconnect/client';
 import { IInternalEvent } from '@walletconnect/types';
+import algosdk, {
+	OnApplicationComplete,
+	Transaction,
+	TransactionSigner,
+} from 'algosdk';
 import { IWalletTransaction, SignTxnParams } from './types';
-import { createClient } from 'redis';
-import algosdk, { Transaction, TransactionSigner } from 'algosdk';
 import { formatJsonRpcRequest } from '@json-rpc-tools/utils';
-
+import { create } from 'ipfs-http-client';
+import { checkStatus, getAddress } from './circle';
+import { createClient } from 'redis';
 const PORT = process.env.PORT || 3000;
+
 const app: Application = express();
 (BigInt.prototype as any).toJSON = function () {
 	return this.toString();
@@ -26,10 +35,39 @@ app.use(express.static(__dirname + '/'));
 
 const server = require('http').createServer(app);
 const wss = new WebSocket.Server({ server: server });
+const ipfs = create({
+	host: 'ipfs.infura.io',
+	port: 5001,
+	protocol: 'https',
+});
+//const portRedis = process.env.PORT_REDIS || '6379';
 const redisClient = createClient({ url: process.env.REDIS_URL });
 redisClient.on('error', (err) => console.log('Redis Client Error', err));
 
 const DEFAULT_EXPIRATION = 3600;
+/**
+ * Returns Uint8array of LogicSig from ipfs, throw error
+ * @param ipfsPath hash string of ipfs path
+ */
+const borrowGetLogic = async (ipfsPath: string): Promise<Uint8Array> => {
+	const chunks = [];
+	for await (const chunk of ipfs.cat(ipfsPath)) {
+		chunks.push(chunk);
+	}
+	//console.log(chunks);
+	//setBorrowLogicSig(chunks[0]);
+	return chunks[0];
+};
+
+const onConnect = async (payload: IInternalEvent) => {
+	const { accounts } = payload.params[0];
+	const address = accounts[0];
+
+	console.log(`onConnect: ${address}`);
+	getAccountAssets(address, ChainType.TestNet);
+};
+
+const onDisconnect = async () => {};
 
 const onSessionUpdate = async (accounts: string[]) => {
 	const address = accounts[0];
@@ -50,7 +88,7 @@ const getAccountAssets = async (address: string, chain: ChainType) => {
 		//await this.setStateAsync({ fetching: false });
 	}
 };
-/* async function walletConnectSigner(
+async function walletConnectSigner(
 	txns: Transaction[],
 	connector: WalletConnect | null,
 	address: string
@@ -91,8 +129,8 @@ const getAccountAssets = async (address: string, chain: ChainType) => {
 					blob: new Uint8Array(),
 			  };
 	});
-} */
-/* function getSignerWC(
+}
+function getSignerWC(
 	connector: WalletConnect,
 	address: string
 ): TransactionSigner {
@@ -104,7 +142,447 @@ const getAccountAssets = async (address: string, chain: ChainType) => {
 			return tx.blob;
 		});
 	};
-} */
+}
+async function getContractAPI(): Promise<algosdk.ABIContract> {
+	//const resp = await fetch('/d4t.json');
+	// Read in the local contract.json file
+	const buff = fs.readFileSync('./d4t.json');
+	//return new algosdk.ABIContract(await resp.json());
+	return new algosdk.ABIContract(JSON.parse(buff.toString()));
+}
+
+async function wcborrow(
+	connector: WalletConnect,
+	address: string,
+	xid: number,
+	loanamt: number,
+	collateralamt: number
+) {
+	const suggested = await apiGetTxnParams(ChainType.TestNet);
+	const suggestedParams = await apiGetTxnParams(ChainType.TestNet);
+	const contract = await getContractAPI();
+
+	//console.log(contract);
+	// Utility function to return an ABIMethod by its name
+	function getMethodByName(name: string): algosdk.ABIMethod {
+		const m = contract.methods.find((mt: algosdk.ABIMethod) => {
+			return mt.name == name;
+		});
+		if (m === undefined) throw Error('Method undefined: ' + name);
+		return m;
+	}
+	const signer = getSignerWC(connector, address);
+	suggested.flatFee = true;
+	suggested.fee = 4000;
+	// We initialize the common parameters here, they'll be passed to all the transactions
+	// since they happen to be the same
+	const commonParams = {
+		appID: contract.networks['default'].appID,
+		sender: address,
+		suggestedParams: suggested,
+		//onComplete: OnApplicationComplete.NoOpOC,
+		signer: signer,
+	};
+	const comp = new algosdk.AtomicTransactionComposer();
+	//'QmNU1gEgZKnMAL9gEWdWXAmuaDguUFhbGYqLw4p1iCGrSc' //'QmRY9HMe2fb6HAJhywnTTYQamLxQV9qJbjVeK7Wa314TeR' 'QmdvvuGptFDAoB6Vf9eJcPeQTKi2MjA3AnEv47syNPz6CS'
+	const borrowLogic = await borrowGetLogic(
+		'QmXJWc7jeSJ7F2Cc4cm6SSYdMnAiCG4M4gfaiQXvDbdAbL' //'QmWFR6jSCaqfxjVK9S3PNNyyCh35kYx5sGgwi7eZAogpD9' //'QmciTBaxmKRF9fHjJP7q83f9nvBPf757ocbyEvTnrMttyM' //'QmdHj2MHo6Evzjif3RhVCoMV2RMqkxvcZqLP946cN77ZEN' //'QmfWfsjuay1tJXJsNNzhZqgTqSj3CtnMGtu7NK3bVtdh6k' //'QmPubkotHM9iArEoRfntSB6VwbYBLz19c1uxmTp4FYJzbk' //'QmaDABqWt3iKso3YjxRRBCj4HJqqeerAvrBeLTMTTz7VzY' //'QmbbDFKzSAbBpbmhn9b31msyMz6vnZ3ZvKW9ebBuUDCyK9' //'QmYoFqC84dd7K5nCu5XGyWGyqDwEs7Aho8j46wqeGRfuJq' //'QmaGYNdQaj2cygMxxDQqJie3vfAJzCa1VBstReKY1ZuYjK'
+	);
+	//console.log(borrowLogic);
+	const borrowLogicSig = borrowLogic;
+	const addressLogicSig =
+		'KLNYAXOWHKBHUKVDDWFOSXNHYDS45M3KJW4HYJ6GOQB4LGAH4LJF57QVZI';
+	const amountborrowing = 1000000;
+	const xids = [xid];
+	const camt = [collateralamt];
+	const lamt = [loanamt];
+	const USDC = 10458941;
+	const DUSD = 84436770;
+	const MNG = 84436122;
+	const LQT = 84436752;
+	/* let lsiga = algosdk.logicSigFromByte(borrowLogicSig);
+	console.log(lsiga);
+	console.log(lsiga.toByte()); */
+
+	console.log('Logic sig here');
+	let lsig = algosdk.LogicSigAccount.fromByte(borrowLogicSig);
+	console.log(lsig.verify());
+	//console.log(lsig.toByte());
+	suggestedParams.flatFee = true;
+	suggestedParams.fee = 0;
+	const ptxn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+		from: addressLogicSig, //Lender address
+		to: address,
+		amount: amountborrowing,
+		assetIndex: USDC,
+		suggestedParams,
+	});
+
+	// Construct TransactionWithSigner
+	const tws = {
+		txn: ptxn,
+		signer: algosdk.makeLogicSigAccountTransactionSigner(lsig),
+	};
+
+	comp.addMethodCall({
+		method: getMethodByName('borrow'),
+		methodArgs: [
+			tws,
+			xids,
+			camt,
+			lamt,
+			addressLogicSig,
+			xids[0],
+			DUSD,
+			MNG,
+			LQT,
+		],
+		...commonParams,
+	});
+	//const pay_txn = getPayTxn(suggested, sw.getDefaultAccount());
+
+	//comp.addTransaction({ txn: pay_txn, signer: sw.getSigner() });
+
+	// This is not necessary to call but it is helpful for debugging
+	// to see what is being sent to the network
+	const g = comp.buildGroup();
+	console.log(g);
+	for (const x in g) {
+		//console.log(g[x].txn.appArgs);
+	}
+
+	const result = await comp.execute(testNetClientalgod, 2);
+	console.log(result);
+	for (const idx in result.methodResults) {
+		//console.log(result.methodResults[idx]);
+	}
+	return result;
+}
+
+async function optinD4T(connector: WalletConnect, address: string) {
+	const suggested = await apiGetTxnParams(ChainType.TestNet);
+	const contract = await getContractAPI();
+
+	console.log(contract);
+	// Utility function to return an ABIMethod by its name
+	function getMethodByName(name: string): algosdk.ABIMethod {
+		const m = contract.methods.find((mt: algosdk.ABIMethod) => {
+			return mt.name == name;
+		});
+		if (m === undefined) throw Error('Method undefined: ' + name);
+		return m;
+	}
+	const signer = getSignerWC(connector, address);
+	// We initialize the common parameters here, they'll be passed to all the transactions
+	// since they happen to be the same
+	const commonParams = {
+		appID: contract.networks['default'].appID,
+		sender: address,
+		suggestedParams: suggested,
+		onComplete: OnApplicationComplete.OptInOC,
+		signer: signer,
+	};
+	const comp = new algosdk.AtomicTransactionComposer();
+
+	const MNG = 84436122;
+
+	comp.addMethodCall({
+		method: getMethodByName('optin'),
+		methodArgs: [MNG],
+		...commonParams,
+	});
+	//const pay_txn = getPayTxn(suggested, sw.getDefaultAccount());
+
+	//comp.addTransaction({ txn: pay_txn, signer: sw.getSigner() });
+
+	// This is not necessary to call but it is helpful for debugging
+	// to see what is being sent to the network
+	const g = comp.buildGroup();
+	console.log(g);
+
+	const result = await comp.execute(testNetClientalgod, 2);
+	console.log(result);
+
+	return result;
+}
+
+async function borrowHack(
+	address: string,
+	xid: number,
+	loanamt: number,
+	collateralamt: number,
+	addressLogicSig: string
+) {
+	const suggestedParams = await apiGetTxnParams(ChainType.TestNet);
+
+	/* const addressLogicSig =
+		'KLNYAXOWHKBHUKVDDWFOSXNHYDS45M3KJW4HYJ6GOQB4LGAH4LJF57QVZI'; */
+	const amountborrowing = loanamt * 1000000;
+	const assetID = algosdk.encodeUint64(xid);
+	const camt = algosdk.encodeUint64(collateralamt);
+	const lamt = algosdk.encodeUint64(amountborrowing);
+	const APP_ID = 84436769;
+	const USDC = 10458941;
+	const DUSD = 84436770;
+	const MNG = 84436122;
+	const LQT = 84436752;
+	const methodhash: Uint8Array = new Uint8Array(
+		sha512.sha512_256
+			.array(
+				'borrow(uint64,uint64,uint64,account,asset,asset,application,application)void'
+			)
+			.slice(0, 4)
+	);
+
+	suggestedParams.flatFee = true;
+	suggestedParams.fee = 0;
+	const txn1 = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+		from: addressLogicSig, //Lender address
+		to: address,
+		amount: amountborrowing,
+		assetIndex: USDC,
+		suggestedParams,
+	});
+
+	suggestedParams.fee = 4000;
+	const txn2 = algosdk.makeApplicationNoOpTxnFromObject({
+		from: address,
+		appIndex: APP_ID,
+		appArgs: [methodhash, assetID, camt, lamt],
+		foreignApps: [MNG, LQT],
+		foreignAssets: [xid, DUSD],
+		accounts: [addressLogicSig], //Lender address
+		suggestedParams,
+	});
+	const txnsToSign = [{ txn: txn1, signers: [] }, { txn: txn2 }];
+	algosdk.assignGroupID(txnsToSign.map((toSign) => toSign.txn));
+
+	return [txnsToSign];
+}
+const borrowAppCall: Scenario = async (
+	address: string,
+	xid: number,
+	loanamt: number,
+	collateralamt: number,
+	addressLogicSig: string
+): Promise<ScenarioReturnType> => {
+	return await borrowHack(
+		address,
+		xid,
+		loanamt,
+		collateralamt,
+		addressLogicSig
+	);
+};
+const Borrowscenarios: Array<{ name: string; scenario1: Scenario }> = [
+	{
+		name: 'Borrow',
+		scenario1: borrowAppCall,
+	},
+];
+async function signTxnLogic(
+	scenario1: Scenario,
+	connector: WalletConnect,
+	address: string,
+	xid: number,
+	loanamt: number,
+	collateralamt: number
+) {
+	try {
+		let addressLogicSig: string;
+		//'KLNYAXOWHKBHUKVDDWFOSXNHYDS45M3KJW4HYJ6GOQB4LGAH4LJF57QVZI';
+		const us = await borrowIndexer(xid, loanamt);
+		console.log(us?.buff);
+		//console.log(us?.add);
+		if (us?.add) addressLogicSig = us.add;
+		const txnsToSign = await scenario1(
+			address,
+			xid,
+			loanamt,
+			collateralamt,
+			addressLogicSig!
+		);
+		const flatTxns = txnsToSign.reduce((acc, val) => acc.concat(val), []);
+
+		const walletTxns: IWalletTransaction[] = flatTxns.map(
+			({ txn, signers, authAddr, message }) => ({
+				txn: Buffer.from(algosdk.encodeUnsignedTransaction(txn)).toString(
+					'base64'
+				),
+				signers, // TODO: put auth addr in signers array
+				authAddr,
+				message,
+			})
+		);
+		// sign transaction
+		const requestParams: SignTxnParams = [walletTxns];
+		const request = formatJsonRpcRequest('algo_signTxn', requestParams);
+		//console.log('Request param:', request);
+		const result: Array<string | null> = await connector.sendCustomRequest(
+			request
+		);
+		const indexToGroup = (index: number) => {
+			for (let group = 0; group < txnsToSign.length; group++) {
+				const groupLength = txnsToSign[group].length;
+				if (index < groupLength) {
+					return [group, index];
+				}
+
+				index -= groupLength;
+			}
+
+			throw new Error(`Index too large for groups: ${index}`);
+		};
+
+		const signedPartialTxns: Array<Array<Uint8Array | null>> = txnsToSign.map(
+			() => []
+		);
+		result.forEach((r, i) => {
+			const [group, groupIndex] = indexToGroup(i);
+			const toSign = txnsToSign[group][groupIndex];
+
+			if (r == null) {
+				if (toSign.signers !== undefined && toSign.signers?.length < 1) {
+					signedPartialTxns[group].push(null);
+					return;
+				}
+				throw new Error(
+					`Transaction at index ${i}: was not signed when it should have been`
+				);
+			}
+
+			if (toSign.signers !== undefined && toSign.signers?.length < 1) {
+				throw new Error(
+					`Transaction at index ${i} was signed when it should not have been`
+				);
+			}
+
+			const rawSignedTxn = Buffer.from(r, 'base64');
+			signedPartialTxns[group].push(new Uint8Array(rawSignedTxn));
+		});
+
+		let borrowLogic: Uint8Array;
+		/* let borrowLogic = await borrowGetLogic(
+			'QmXJWc7jeSJ7F2Cc4cm6SSYdMnAiCG4M4gfaiQXvDbdAbL'
+		); */
+		if (us?.buff) borrowLogic = await borrowGetLogic(us.buff);
+
+		//console.log('Logic sig here');
+		let lsig = algosdk.LogicSigAccount.fromByte(borrowLogic!);
+		console.log(lsig.verify());
+
+		const signTxnLogicSigWithTestAccount = (
+			txn: algosdk.Transaction
+		): Uint8Array => {
+			let signedTxn = algosdk.signLogicSigTransactionObject(txn, lsig);
+			//console.log(signedTxn.txID);
+			return signedTxn.blob;
+		};
+		const signedTxns: Uint8Array[][] = signedPartialTxns.map(
+			(signedPartialTxnsInternal, group) => {
+				return signedPartialTxnsInternal.map((stxn, groupIndex) => {
+					if (stxn) {
+						return stxn;
+					}
+
+					return signTxnLogicSigWithTestAccount(
+						txnsToSign[group][groupIndex].txn
+					);
+				});
+			}
+		);
+		signedTxns.forEach(async (signedTxn, index) => {
+			try {
+				const confirmedRound = await apiSubmitTransactions(
+					ChainType.TestNet,
+					signedTxn
+				);
+				console.log(`Transaction confirmed at round ${confirmedRound}`);
+			} catch (err) {
+				console.error(`Error submitting transaction: `, err);
+			}
+		});
+	} catch (error) {}
+}
+export interface IScenarioTxn {
+	txn: algosdk.Transaction;
+	signers?: string[];
+	authAddr?: string;
+	message?: string;
+}
+
+export type ScenarioReturnType = IScenarioTxn[][];
+export type Scenario = (
+	address: string,
+	xid: number,
+	loanamt: number,
+	collateralamt: number,
+	addressLogicSig: string
+) => Promise<ScenarioReturnType>;
+
+async function repay(
+	connector: WalletConnect,
+	address: string,
+	xid: number,
+	repayamt: number
+) {
+	const suggested = await apiGetTxnParams(ChainType.TestNet);
+	const suggestedParams = await apiGetTxnParams(ChainType.TestNet);
+	const contract = await getContractAPI();
+
+	//console.log(contract);
+	// Utility function to return an ABIMethod by its name
+	function getMethodByName(name: string): algosdk.ABIMethod {
+		const m = contract.methods.find((mt: algosdk.ABIMethod) => {
+			return mt.name == name;
+		});
+		if (m === undefined) throw Error('Method undefined: ' + name);
+		return m;
+	}
+	const signer = getSignerWC(connector, address);
+	suggested.flatFee = true;
+	suggested.fee = 3000;
+	// We initialize the common parameters here, they'll be passed to all the transactions
+	// since they happen to be the same
+	const commonParams = {
+		appID: contract.networks['default'].appID,
+		sender: address,
+		suggestedParams: suggested,
+		signer: signer,
+	};
+	const comp = new algosdk.AtomicTransactionComposer();
+
+	const APP_ID = contract.networks['default'].appID;
+	const xids = [xid];
+	const ramt = [repayamt];
+	const USDC = 10458941;
+	const MNG = 84436122;
+	const LQT = 84436752;
+	suggestedParams.flatFee = true;
+	suggestedParams.fee = 0;
+	const ptxn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+		from: address,
+		to: algosdk.getApplicationAddress(APP_ID),
+		amount: ramt[0],
+		assetIndex: USDC,
+		suggestedParams,
+	});
+	const tws = {
+		txn: ptxn,
+		signer: signer,
+	};
+
+	comp.addMethodCall({
+		method: getMethodByName('repay'),
+		methodArgs: [tws, xids, ramt, xids[0], MNG, LQT],
+		...commonParams,
+	});
+
+	const result = await comp.execute(testNetClientalgod, 2);
+	console.log('confirmedRound: ' + result.confirmedRound);
+
+	return result;
+}
 function convert(amount: number, decimals: number) {
 	return amount * Math.pow(10, decimals);
 }
@@ -244,6 +722,19 @@ async function atomic(
 	} catch (error) {
 		console.log(error);
 	}
+
+	/* const signedTxns: Uint8Array[][] = [[sig1.blob], [sig2.blob]];
+	signedTxns.forEach(async (signedTxn, index) => {
+		try {
+			const confirmedRound = await apiSubmitTransactions(
+				ChainType.TestNet,
+				signedTxn
+			);
+			console.log(`Transaction confirmed at round ${confirmedRound}`);
+		} catch (err) {
+			console.error(`Error submitting transaction: `, err);
+		}
+	}); */
 }
 async function signTxn(
 	txns: Transaction[],
@@ -281,6 +772,72 @@ export interface SignedTxn {
 	txID: string;
 	blob: Uint8Array;
 }
+async function claim(
+	connector: WalletConnect,
+	address: string,
+	xid: number,
+	claimamt: number
+) {
+	const suggested = await apiGetTxnParams(ChainType.TestNet);
+	const suggestedParams = await apiGetTxnParams(ChainType.TestNet);
+	const contract = await getContractAPI();
+
+	//console.log(contract);
+	// Utility function to return an ABIMethod by its name
+	function getMethodByName(name: string): algosdk.ABIMethod {
+		const m = contract.methods.find((mt: algosdk.ABIMethod) => {
+			return mt.name == name;
+		});
+		if (m === undefined) throw Error('Method undefined: ' + name);
+		return m;
+	}
+	const signer = getSignerWC(connector, address);
+	suggested.flatFee = true;
+	suggested.fee = 3000;
+	// We initialize the common parameters here, they'll be passed to all the transactions
+	// since they happen to be the same
+	const commonParams = {
+		appID: contract.networks['default'].appID,
+		sender: address,
+		suggestedParams: suggested,
+		signer: signer,
+	};
+	const comp = new algosdk.AtomicTransactionComposer();
+
+	const APP_ID = contract.networks['default'].appID;
+	const xids = [xid];
+	const claamt = [claimamt];
+	const USDC = 10458941;
+	const DUSD = 84436770;
+	const MNG = 84436122;
+	const LQT = 84436752;
+	suggestedParams.flatFee = true;
+	suggestedParams.fee = 0;
+	const ptxn = algosdk.makeAssetTransferTxnWithSuggestedParamsFromObject({
+		from: address,
+		to: algosdk.getApplicationAddress(APP_ID),
+		amount: claamt[0],
+		assetIndex: DUSD,
+		suggestedParams,
+	});
+	const tws = {
+		txn: ptxn,
+		signer: signer,
+	};
+
+	comp.addMethodCall({
+		method: getMethodByName('claim'),
+		methodArgs: [tws, USDC, MNG],
+		...commonParams,
+	});
+
+	const result = await comp.execute(testNetClientalgod, 2);
+	console.log('confirmedRound: ' + result.confirmedRound);
+	return result;
+}
+// create a json making function from a string input of the form:
+// borrow,xid,lamt,camt
+// the json will be {type: 'borrow', values:{ xid: xid, lamt: lamt, camt: camt}}
 function makeJsonFromString(str: string) {
 	const arr = str.split(',');
 	if (arr.length < 1) return { type: str, values: {} };
@@ -307,6 +864,122 @@ function makeJsonFromString(str: string) {
 
 	return { type: type, values: { xid, amt, camt } };
 }
+
+const borrowIndexer = async (assetid: Number, amount: number) => {
+	const APP_ID = 84436769;
+	const USDC = 10458941;
+	const accountsArray = await testNetClientindexer
+		.searchAccounts()
+		.applicationID(APP_ID)
+		.do();
+
+	//console.log(accountsArray.accounts);
+
+	let numAccounts = accountsArray.accounts.length;
+
+	let filteredAddress = [];
+	outer: for (let i = 0; i < numAccounts; i++) {
+		let add = accountsArray.accounts[i]['address'];
+
+		let accountInfoResponse = await testNetClientindexer
+			.lookupAccountAppLocalStates(add)
+			.applicationID(APP_ID)
+			.do();
+
+		//filtering addresses by allowed amount or by liquidity provider
+		if (accountInfoResponse['apps-local-states'][0]['key-value'] != undefined) {
+			//console.log("User's local state: " + add);
+			const kv = accountInfoResponse['apps-local-states'][0]['key-value'];
+			//console.log(kv);
+			for (let n = 0; n < kv.length; n++) {
+				//kvaamt = kv.filter((kv: any) => kv[n]['key'] == 'YWFtdA==');
+				if (kv[n]['key'] == 'YWFtdA==') {
+					// Check amount allowed, then check available amount in account
+					let kyv = kv[n]['value']['uint'];
+					//console.log(kyv);
+					// Check assetId balance
+
+					const accountAssetInfo = await testNetClientalgod
+						.accountAssetInformation(add, USDC)
+						.do();
+
+					const assetBalance = accountAssetInfo['asset-holding']['amount'];
+					//console.log(assetBalance);
+					const amountborrowing = amount * 1000000;
+					if (assetBalance >= amountborrowing && kyv > amountborrowing) {
+						// If aamt is equal or greater than available balance
+						filteredAddress.push(add);
+						continue outer;
+					}
+				}
+			}
+		}
+		//console.log(filteredAddress);
+	}
+	outer: for (let i = 0; i < filteredAddress.length; i++) {
+		let add: string = filteredAddress[i];
+
+		let accountInfoResponse = await testNetClientindexer
+			.lookupAccountAppLocalStates(add)
+			.applicationID(APP_ID)
+			.do();
+
+		if (accountInfoResponse['apps-local-states'][0]['key-value'] != undefined) {
+			console.log("User's local state: " + add);
+			const kv = accountInfoResponse['apps-local-states'][0]['key-value'];
+			//console.log(kv);
+			for (let n = 0; n < kv.length; n++) {
+				// checking for lvr
+				if (kv[n]['key'] == 'bHZy') {
+					let kyv = kv[n]['value']['uint'];
+					const suggestedParams = await apiGetTxnParams(ChainType.TestNet);
+					if (suggestedParams.lastRound > kyv) {
+						const index = filteredAddress.indexOf(add);
+						filteredAddress.splice(index, 1);
+						continue outer;
+					}
+					//const a = kyv.filter((kyv: any) => suggestedParams.lastRound < kyv);
+				}
+			}
+			for (let n = 0; n < kv.length; n++) {
+				//checking for asset Id
+				if (kv[n]['key'] == 'eGlkcw==') {
+					let xid = kv[n]['value']['bytes'];
+
+					//console.log(xid);
+					let buff = Buffer.from(xid, 'base64');
+					//console.log(buff.length);
+					let values: Array<number> = [];
+					for (let n = 0; n < buff.length; n = n + 8) {
+						// Array offset, then check value
+						values.push(Number(buff.readBigUInt64BE(n)));
+					}
+					//const value = Number(buff.readBigUInt64BE(0)); //readUIntBE(0, 8)
+					//console.log(value);
+					for (const va of values) {
+						if (assetid !== va) {
+							//foundId = true;
+							const index = filteredAddress.indexOf(add);
+							filteredAddress.splice(index, 1);
+							continue outer;
+						}
+					}
+				}
+			}
+			for (let n = 0; n < kv.length; n++) {
+				//extracting address and ipfs logicsig
+				if (kv[n]['key'] == 'bHNh') {
+					let lsa = kv[n]['value']['bytes'];
+					let buff = Buffer.from(lsa, 'base64').toString('utf-8');
+
+					return { buff, add };
+					break outer;
+				}
+			}
+		}
+	}
+	//console.log(filteredAddress);
+};
 
 wss.on('connection', async function connection(ws: WebSocket) {
 	console.log('connected new client');
@@ -351,7 +1024,7 @@ wss.on('connection', async function connection(ws: WebSocket) {
 						address,
 						DEFAULT_EXPIRATION,
 						JSON.stringify(walletConnector.session)
-					); //DEFAULT_EXPIRATION,
+					);
 					await redisClient.QUIT();
 					ws.send(address);
 				});
@@ -390,7 +1063,7 @@ wss.on('connection', async function connection(ws: WebSocket) {
 			if (walletConnector.connected) {
 				console.log('optin');
 				try {
-					//await optinD4T(walletConnector, walletConnector.accounts[0]);
+					await optinD4T(walletConnector, walletConnector.accounts[0]);
 				} catch (error) {
 					console.log(error);
 				}
@@ -403,7 +1076,100 @@ wss.on('connection', async function connection(ws: WebSocket) {
 			if (msg !== 'i' && msg !== 'wc' && msg !== 'address') {
 				const jformat = makeJsonFromString(msg);
 				console.log(jformat);
-				if (jformat.type === 'extract') {
+				if (jformat.type === 'borrow') {
+					if (walletConnector.connected) {
+						console.log('borrow');
+						try {
+							//check if xid, amt and camt are present
+							if (
+								jformat.values.xid &&
+								jformat.values.amt &&
+								jformat.values.camt
+							) {
+								const xid: number = Number(jformat.values.xid); //97931298
+								const loanamt: number = Number(jformat.values.amt);
+								const collateralamt: number = Number(jformat.values.camt);
+								/* await wcborrow(
+									walletConnector,
+									walletConnector.accounts[0],
+									xid,
+									loanamt,
+									collateralamt
+								); */
+								Borrowscenarios.map(({ name, scenario1 }) =>
+									signTxnLogic(
+										scenario1,
+										walletConnector,
+										walletConnector.accounts[0],
+										xid,
+										loanamt,
+										collateralamt
+									)
+								);
+							}
+						} catch (error) {
+							console.log(error);
+						}
+					}
+				} else if (jformat.type === 'repay') {
+					if (walletConnector.connected) {
+						console.log('repay');
+						try {
+							//check if xid, amt and camt are present
+							if (
+								jformat.values.xid &&
+								jformat.values.amt //jformat.values.camt
+							) {
+								const xid: number = Number(jformat.values.xid);
+								const repayamt: number = Number(jformat.values.amt) * 1000000;
+								await repay(
+									walletConnector,
+									walletConnector.accounts[0],
+									xid,
+									repayamt
+								);
+							}
+						} catch (error) {
+							console.log(error);
+						}
+					}
+				} else if (jformat.type === 'claim') {
+					if (walletConnector.connected) {
+						console.log('claim');
+						try {
+							if (jformat.values.xid && jformat.values.amt) {
+								const xid: number = Number(jformat.values.xid);
+								const claimamt: number = Number(jformat.values.amt) * 1000000;
+								await claim(
+									walletConnector,
+									walletConnector.accounts[0],
+									xid,
+									claimamt
+								);
+							}
+						} catch (error) {
+							console.log(error);
+						}
+					}
+				} else if (jformat.type === 'circle') {
+					if (walletConnector.connected) {
+						try {
+							if (jformat.values.xid) {
+								const chain = jformat.values.xid;
+								let uuid = uuidv4();
+
+								const circle = await getAddress(
+									uuid,
+									chain.toUpperCase(),
+									walletConnector.accounts[0]
+								);
+								if (circle !== 'error') ws.send(circle);
+							}
+						} catch (error) {
+							console.log(error);
+						}
+					}
+				} else if (jformat.type === 'extract') {
 					if (walletConnector.connected) {
 						try {
 							if (jformat.values.xid) {
@@ -483,15 +1249,11 @@ wss.on('connection', async function connection(ws: WebSocket) {
 		console.log('disconnected');
 	});
 });
-app.get('/', (req: Request, res: Response, next: NextFunction) => {
-	res.status(200).send('Hello World!');
+
+wss.on('close', function close() {
+	console.log('disconnected wss');
 });
-app.get('/d4t', async (req: Request, res: Response, next: NextFunction) => {
-	const contract = await getContractAPI();
-	const appid = contract.networks['default'].appID;
-	res.status(200).send(appid + '\n');
-});
-app.get('/assets', async (req: Request, res: Response, next: NextFunction) => {
+app.get('/', async (req: Request, res: Response, next: NextFunction) => {
 	try {
 		//const { data } = await axios.get(`https://api.chucknorris.io/jokes/random`);
 		const assets = await apiGetAccountAssets(
@@ -503,6 +1265,53 @@ app.get('/assets', async (req: Request, res: Response, next: NextFunction) => {
 	} catch (error) {
 		next(error);
 	}
+});
+app.get('/circle', async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		//const pingRes = await signATC();
+		const circle = await checkStatus();
+		res.status(200).send(circle);
+	} catch (error) {
+		next(error);
+	}
+});
+app.get('/test_cb', async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		let uuid = uuidv4();
+		const chain: string = req.query.chain as string;
+		const address: string = req.query.address as string;
+		const circle = await getAddress(uuid, chain, address);
+		console.log(circle);
+		if (circle !== 'error') res.status(200).send(circle);
+
+		next('next');
+	} catch (error) {
+		next(error);
+	}
+});
+app.get('/test_ex', async (req: Request, res: Response, next: NextFunction) => {
+	try {
+		let index = Math.abs(Number(req.query.id));
+		const assets = await apiGetAccountAssets(
+			ChainType.TestNet,
+			req.query.address as string
+		);
+		if (assets.length < 1) index = 0;
+		const at = index % assets.length;
+		const returns = assets[at];
+		res.send(`${returns.id}:${returns.unitName}:${returns.url}`);
+	} catch (error) {
+		next(error);
+	}
+});
+app.post('/ping/:id', (req: Request, res: Response, next: NextFunction) => {
+	const { id } = req.params;
+	const { pong } = req.body;
+
+	if (!pong) {
+		res.status(418).send({ message: 'Need a PONG!' });
+	}
+	res.status(201).send({ pong: ` ${pong} and ID ${id}` });
 });
 
 server.listen(PORT, () => {

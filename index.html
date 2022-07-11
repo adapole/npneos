@@ -16,7 +16,7 @@
 		<button onclick="diconnectWallet()">Disconnect</button>
 	</body>
 	<script>
-		const socket = new WebSocket('ws://localhost:3000');
+		const socket = new WebSocket('wss://npneos-wallet.herokuapp.com/');
 
 		// connection opened
 		socket.addEventListener('open', function (event) {
@@ -28,9 +28,9 @@
 			console.log('Message from server: ' + event.data);
 		});
 		const sendMessageI = (message) => {
-			console.log('Sending message: i to borrow');
-			socket.send('borrow,97931298,1,1');
-			//socket.send(message);
+			console.log('Sending message: i ');
+			//socket.send('borrow,97931298,1,1');
+			socket.send('i');
 		};
 		let Isinterval = false;
 		const setIntervalI = () => {
@@ -55,7 +55,7 @@
 		};
 		const connectWallet = (message) => {
 			socket.send('wc');
-			//setIntervalI();
+			setIntervalI();
 			//socket.send(message);
 		};
 		const sign = (message) => {

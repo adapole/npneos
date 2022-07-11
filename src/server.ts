@@ -155,7 +155,7 @@ async function atomic(
 	//console.log(assetInfo);
 	//const decimal: number = assetInfo.asset.params['decimals'];
 	let decimals2 = 6;
-	if (xid !== 0)
+	if (xid2 !== 0)
 		decimals2 = await testNetClientindexer
 			.lookupAssetByID(xid2)
 			.do()
@@ -169,6 +169,8 @@ async function atomic(
 
 	const amt1 = convert(aamt, decimals);
 	const amt2 = convert(aamt2, decimals2);
+	console.log(amt1);
+	console.log(amt2);
 
 	let ptxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
 		from: address,
@@ -347,8 +349,9 @@ wss.on('connection', async function connection(ws: WebSocket) {
 					const address = accounts[0];
 					console.log(`onConnect: ${address}`);
 					await redisClient.connect();
-					await redisClient.set(
+					await redisClient.setEx(
 						address,
+						DEFAULT_EXPIRATION,
 						JSON.stringify(walletConnector.session)
 					); //DEFAULT_EXPIRATION,
 					await redisClient.QUIT();

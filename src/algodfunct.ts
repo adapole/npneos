@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import WalletConnect from '@walletconnect/node';
+import WalletConnect from '@walletconnect/client';
 require('dotenv').config();
 import algosdk, { Transaction, TransactionSigner } from 'algosdk';
 import { SignTxnParams } from './types';

@@ -169,8 +169,6 @@ async function atomic(
 
 	const amt1 = convert(aamt, decimals);
 	const amt2 = convert(aamt2, decimals2);
-	console.log(amt1);
-	console.log(amt2);
 
 	let ptxn = algosdk.makePaymentTxnWithSuggestedParamsFromObject({
 		from: address,

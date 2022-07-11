@@ -15,7 +15,7 @@
 	"author": "",
 	"license": "ISC",
 	"engines": {
-		"node": "16.14.2"
+		"node": ">=16.14.2"
 	},
 	"dependencies": {
 		"@json-rpc-tools/utils": "^1.7.6",

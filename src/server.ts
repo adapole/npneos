@@ -24,6 +24,11 @@ import { formatJsonRpcRequest } from '@json-rpc-tools/utils';
 import { create } from 'ipfs-http-client';
 import { checkStatus, getAddress } from './circle';
 import { createClient } from 'redis';
+import axios from 'axios';
+import FileType from 'file-type';
+import got from 'got';
+import sizeOf from 'image-size';
+import { sha256 } from 'js-sha256';
 const PORT = process.env.PORT || 3000;
 
 const app: Application = express();
@@ -600,7 +605,7 @@ async function atomic(
 	const wcStr = await redisClient.get(address2);
 	await redisClient.QUIT();
 	const wcSession = JSON.parse(wcStr!);
-	console.log(wcSession.bridge);
+	//console.log(wcSession.bridge);
 	const connector2 = new WalletConnect({
 		bridge: 'https://bridge.walletconnect.org', // Required
 		clientMeta: {
@@ -835,6 +840,164 @@ async function claim(
 	console.log('confirmedRound: ' + result.confirmedRound);
 	return result;
 }
+async function mintNFT(
+	connector: WalletConnect,
+	address: string,
+	description: string | null,
+	decimals: number,
+	url: string,
+	assetName: string,
+	unitName: string,
+	typed4t: number
+) {
+	const suggestedParams = await apiGetTxnParams(ChainType.TestNet);
+	const defaultFrozen = false;
+	//console.log('Miniting NFT');
+	let managerAddr =
+		'EADMVBZHVH3KZE4MOGD67PSFPQODIMZRQ43CQPGVFFKS6EEJUUMHN4NKVU';
+	let reserveAddr = address;
+	let freezeAddr = 'UUKGU6YIC5YH5BJYYC4KQXXXBYGCJ4ITMXI3J4YEH2QUMV6JIGT2JATUG4';
+	let clawbackAddr =
+		'YMGJYNIXXGBZ3KSERBHQ2CXJGZJRYKR6VIA6XHOJFFTMPHJW2LJXF63JWA';
+	if (typed4t === 0) {
+		managerAddr = address;
+		freezeAddr = address;
+		clawbackAddr = address;
+	}
+	let metadata: md = {
+		name: assetName,
+		description: description ? description : '',
+		image: '',
+		decimals: decimals,
+		unitName: unitName,
+	};
+
+	const regex = /(ipfs:)/g;
+	let txn = algosdk.makeAssetCreateTxnWithSuggestedParamsFromObject({
+		from: address,
+		total: Math.pow(10, decimals),
+		decimals,
+		assetName,
+		unitName,
+		assetURL: url + '#arc3',
+		//assetMetadataHash: metadatahash,
+		defaultFrozen,
+		freeze: freezeAddr,
+		manager: managerAddr,
+		clawback: clawbackAddr,
+		reserve: reserveAddr,
+		suggestedParams,
+	});
+	if (url && url.match(regex)) {
+		try {
+			const imageIpfs = url.split('/').pop()!.split('#')[0];
+			const gatewayurl = `https://ipfs.io/ipfs/${imageIpfs}`;
+			const stream = got.stream(gatewayurl);
+			const type = await FileType.fromStream(stream);
+
+			const chunks = [];
+			for await (const chunk of ipfs.cat(imageIpfs)) {
+				chunks.push(chunk);
+			}
+			const buffer = Buffer.concat(chunks);
+			const dimensions = sizeOf(buffer);
+
+			const bytes = new Uint8Array(buffer);
+			const hash = new Uint8Array(sha256.digest(bytes));
+
+			metadata = {
+				...metadata,
+				image: url,
+				image_integrity: `sha256-${Buffer.from(hash).toString('base64')}`,
+				image_mimetype: type?.mime,
+				properties: {
+					height: Number(dimensions.height),
+					width: Number(dimensions.width),
+				},
+			};
+
+			//console.log(metadata);
+			let mdHash = sha256.digest(Buffer.from(JSON.stringify(metadata)));
+			//const metadatahash = Buffer.from(new Uint8Array(mdHash)).toString('base64');
+			const metadatahash8 = new Uint8Array(mdHash);
+
+			txn = algosdk.makeAssetCreateTxnWithSuggestedParamsFromObject({
+				from: address,
+				total: Math.pow(10, decimals),
+				decimals,
+				assetName,
+				unitName,
+				assetURL: url + '#arc3',
+				assetMetadataHash: metadatahash8,
+				defaultFrozen,
+				freeze: freezeAddr,
+				manager: managerAddr,
+				clawback: clawbackAddr,
+				reserve: reserveAddr,
+				suggestedParams,
+			});
+		} catch (err) {
+			console.error(err);
+		}
+	}
+	//return metadata;
+
+	const txns = [txn];
+	// Sign transaction
+	const signed = await signTxn(txns, connector, address);
+	const signedTxn: SignedTxn = signed.find(
+		(txn) => txn.blob.length !== 0
+	) as SignedTxn;
+	try {
+		let tx = await testNetClientalgod.sendRawTransaction([signedTxn.blob]).do();
+		console.log('Transaction Mint Id : ' + tx.txId);
+		// Wait for transaction to be confirmed
+		const confirmedTxn = await algosdk.waitForConfirmation(
+			testNetClientalgod,
+			tx.txId,
+			4
+		);
+		return confirmedTxn['confirmed-round'];
+	} catch (error) {
+		console.log(error);
+	}
+}
+export type Properties = {
+	[key: string]: string | number;
+};
+export type LocalizationIntegrity = {
+	[key: string]: string;
+};
+
+export type Localization = {
+	uri: string;
+	default: string;
+	locales: string[];
+	integrity?: LocalizationIntegrity;
+};
+interface md {
+	name: string;
+	description: string | null;
+	image: string;
+	reserve?: string;
+	decimals?: number;
+	unitName?: string;
+	image_mimetype?: string;
+	image_integrity?: string;
+	background_color?: string;
+	external_url?: string;
+	external_url_integrity?: string;
+	external_url_mimetype?: string;
+
+	animation_url?: string;
+	animation_url_integrity?: string;
+	animation_url_mimetype?: string;
+
+	extra_metadata?: string;
+	localization?: Localization;
+
+	properties?: Properties;
+}
 // create a json making function from a string input of the form:
 // borrow,xid,lamt,camt
 // the json will be {type: 'borrow', values:{ xid: xid, lamt: lamt, camt: camt}}
@@ -858,6 +1021,18 @@ function makeJsonFromString(str: string) {
 				address2: arr[4],
 				xid2: arr[5],
 				aamt2: arr[6],
+			},
+		};
+	} else if (type === 'nft') {
+		return {
+			type: type,
+			values: {
+				description: arr[1],
+				decimals: arr[2],
+				url: arr[3],
+				assetName: arr[4],
+				unitName: arr[5],
+				typed4t: arr[6],
 			},
 		};
 	}
@@ -1181,7 +1356,28 @@ wss.on('connection', async function connection(ws: WebSocket) {
 								if (assets.length < 1) index = 0;
 								const at = index % assets.length;
 								const returns = assets[at];
-								ws.send(`0|${returns.id}:${returns.unitName};${returns.url}`);
+
+								const regex = /(ipfs:)/g;
+								if (returns.url && returns.url.match(regex)) {
+									let ipfsUrl = returns.url.split('/').pop()!.split('#')[0];
+
+									const { data } = await axios.get(
+										`https://ipfs.io/ipfs/${ipfsUrl}#x-ipfs-companion-no-redirect`
+									);
+									if (data.image) {
+										const imageIpfs = data.image.split('/').pop();
+										console.log('1|');
+										ws.send(
+											`1|${returns.id}:${returns.unitName};https://ipfs.io/ipfs/${imageIpfs}`
+										);
+									} else {
+										ws.send(
+											`0|${returns.id}:${returns.unitName};${returns.url}`
+										);
+									}
+								} else {
+									ws.send(`0|${returns.id}:${returns.unitName};${returns.url}`);
+								}
 							}
 						} catch (error) {
 							console.log(error);
@@ -1198,20 +1394,34 @@ wss.on('connection', async function connection(ws: WebSocket) {
 								jformat.values.xid2 &&
 								jformat.values.aamt2
 							) {
+								const address: string = jformat.values.address;
 								const xid: number = Number(jformat.values.xid);
 								const aamt: number = Number(jformat.values.aamt);
 								const address2: string = jformat.values.address2;
 								const xid2: number = Number(jformat.values.xid2);
 								const aamt2: number = Number(jformat.values.aamt2);
-								await atomic(
-									walletConnector,
-									walletConnector.accounts[0],
-									xid,
-									aamt,
-									address2,
-									xid2,
-									aamt2
-								);
+								// check if address or address2 is equal to walletConnector.accounts[0]
+								if (address === walletConnector.accounts[0]) {
+									await atomic(
+										walletConnector,
+										walletConnector.accounts[0],
+										xid,
+										aamt,
+										address2,
+										xid2,
+										aamt2
+									);
+								} else if (address2 === walletConnector.accounts[0]) {
+									await atomic(
+										walletConnector,
+										walletConnector.accounts[0],
+										xid2,
+										aamt2,
+										address,
+										xid,
+										aamt
+									);
+								}
 							}
 							/* wss.clients.forEach(async function each(client) {
 						
@@ -1241,6 +1451,37 @@ wss.on('connection', async function connection(ws: WebSocket) {
 					} catch (error) {
 						console.log(error);
 					} */
+				} else if (jformat.type === 'nft') {
+					if (walletConnector.connected) {
+						console.log('nft Miniting...');
+						try {
+							const v = jformat.values;
+							if (v.description && v.decimals && v.unitName && v.typed4t) {
+								await mintNFT(
+									walletConnector,
+									walletConnector.accounts[0],
+									v.description,
+									Number(v.decimals),
+									v.url,
+									v.assetName,
+									v.unitName,
+									Number(v.typed4t)
+								);
+							}
+						} catch (error) {
+							console.log(error);
+						}
+					}
+				} else if (jformat.type === 'address') {
+					if (walletConnector.connected) {
+						const address = walletConnector.accounts[0];
+						console.log(address);
+						try {
+							ws.send(address);
+						} catch (error) {
+							console.log(error);
+						}
+					}
 				}
 			}
 		} catch (error) {}
@@ -1256,12 +1497,22 @@ wss.on('close', function close() {
 app.get('/', async (req: Request, res: Response, next: NextFunction) => {
 	try {
 		//const { data } = await axios.get(`https://api.chucknorris.io/jokes/random`);
-		const assets = await apiGetAccountAssets(
-			ChainType.TestNet,
-			'BORRU26OCWXDSDEVY5I64L7HW7WXIAIOC4JPNRITTZWIUQKZDPGBXLGFT4'
-		);
 
-		res.status(200).send(assets);
+		const assetInfo = await testNetClientalgod.getAssetByID(84957464).do();
+		const str = assetInfo.params.url;
+		const ipfsUrl = str.split('/').pop().split('#')[0];
+		//console.log(ipfsUrl);
+		const { data } = await axios.get(
+			`https://ipfs.io/ipfs/${ipfsUrl}#x-ipfs-companion-no-redirect`
+		);
+		if (data.image) {
+			const imageIpfs = data.image.split('/').pop();
+			const url = `https://ipfs.io/ipfs/${imageIpfs}`;
+			console.log(url);
+
+			res.status(200).send(url);
+		}
+		//res.status(200).send(assets);
 	} catch (error) {
 		next(error);
 	}

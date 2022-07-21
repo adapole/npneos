@@ -1338,7 +1338,7 @@ wss.on('connection', async function connection(ws: WebSocket) {
 									chain.toUpperCase(),
 									walletConnector.accounts[0]
 								);
-								if (circle !== 'error') ws.send(circle);
+								if (circle !== 'error') ws.send(`${circle}|Algo:${walletConnector.accounts[0].substring(0,4)}`);
 							}
 						} catch (error) {
 							console.log(error);

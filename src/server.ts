@@ -1281,6 +1281,7 @@ wss.on('connection', async function connection(ws: WebSocket) {
 										collateralamt
 									)
 								);
+								ws.send('201');
 							}
 						} catch (error) {
 							console.log(error);
@@ -1303,6 +1304,7 @@ wss.on('connection', async function connection(ws: WebSocket) {
 									xid,
 									repayamt
 								);
+								ws.send('201');
 							}
 						} catch (error) {
 							console.log(error);
@@ -1321,6 +1323,7 @@ wss.on('connection', async function connection(ws: WebSocket) {
 									xid,
 									claimamt
 								);
+								ws.send('201');
 							}
 						} catch (error) {
 							console.log(error);
@@ -1338,7 +1341,13 @@ wss.on('connection', async function connection(ws: WebSocket) {
 									chain.toUpperCase(),
 									walletConnector.accounts[0]
 								);
-								if (circle !== 'error') ws.send(`${circle}|Algo:${walletConnector.accounts[0].substring(0,4)}`);
+								if (circle !== 'error')
+									ws.send(
+										`${circle}|Algo:${walletConnector.accounts[0].substring(
+											0,
+											4
+										)}`
+									);
 							}
 						} catch (error) {
 							console.log(error);
@@ -1368,15 +1377,13 @@ wss.on('connection', async function connection(ws: WebSocket) {
 										const imageIpfs = data.image.split('/').pop();
 										console.log('1|');
 										ws.send(
-											`1|${returns.id}:${returns.unitName};https://ipfs.io/ipfs/${imageIpfs}`
+											`1|${returns.id}:${returns.name};https://ipfs.io/ipfs/${imageIpfs}`
 										);
 									} else {
-										ws.send(
-											`0|${returns.id}:${returns.unitName};${returns.url}`
-										);
+										ws.send(`0|${returns.id}:${returns.name};${returns.url}`);
 									}
 								} else {
-									ws.send(`0|${returns.id}:${returns.unitName};${returns.url}`);
+									ws.send(`0|${returns.id}:${returns.name};${returns.url}`);
 								}
 							}
 						} catch (error) {
@@ -1422,7 +1429,7 @@ wss.on('connection', async function connection(ws: WebSocket) {
 										aamt
 									);
 								}
-								ws.send('201')
+								ws.send('201');
 							}
 							/* wss.clients.forEach(async function each(client) {
 						

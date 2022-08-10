@@ -10,6 +10,7 @@
 # misc
 .DS_Store
 *.pem
+index.html
 
 # debug
 npm-debug.log*
